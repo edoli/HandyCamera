@@ -15,17 +15,17 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <ToggleButton
-            android:id="@+id/btn_torch"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="토치" />
-
         <Spinner
             android:id="@+id/spinner_imageformat"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:popupBackground="#2A2A2A"/>
+
+        <Spinner
+            android:id="@+id/spinner_flash"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:popupBackground="#2A2A2A" />
 
         <Spinner
             android:id="@+id/spinner_aperture"

@@ -1,14 +1,13 @@
-package kr.edoli.simplecameera
+package kr.edoli.handycamera
 
-import android.util.Log
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.SeekBar
 import android.widget.Spinner
 import kotlin.math.ln
-import kotlin.math.log
 
+const val seekBarProgressMax = 10000
 
 fun SeekBar.bind(min: Int, max: Int, logScale: Boolean = false, onChange: (Int) -> Unit) {
     bind(min.toDouble(), max.toDouble(), logScale) { value ->
@@ -29,14 +28,18 @@ fun SeekBar.bind(min: Long, max: Long, logScale: Boolean = false, onChange: (Lon
 }
 
 fun SeekBar.bind(min: Double, max: Double, logScale: Boolean = false, onChange: (Double) -> Unit) {
-    setMax(10000)
+    val progressToFloat = { progress: Int ->
+        var f = progress / seekBarProgressMax.toDouble()
+        if (logScale) {
+            f = ln(f + 1) / ln(2.0)
+        }
+        f * (max - min) + min
+    }
+
+    setMax(seekBarProgressMax)
     setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
         override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-            var f = progress / 10000.0
-            if (logScale) {
-                f = ln(f + 1) / ln(2.0)
-            }
-            val value = f * (max - min) + min
+            val value = progressToFloat(progress)
             onChange(value)
         }
 

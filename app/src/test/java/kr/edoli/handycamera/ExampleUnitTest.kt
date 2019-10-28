@@ -1,4 +1,4 @@
-package kr.edoli.simplecameera
+package kr.edoli.handycamera
 
 import org.junit.Test
 

@@ -1,4 +1,4 @@
-package kr.edoli.simplecameera
+package kr.edoli.handycamera
 
 import android.Manifest
 import android.content.Context
@@ -15,7 +15,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.util.Size
-import android.util.SparseIntArray
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
@@ -25,17 +24,15 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import kotlinx.android.synthetic.main.activity_main.*
 import java.io.*
+import java.nio.ByteBuffer
+import java.text.DateFormat
+import java.util.*
+import kotlin.collections.ArrayList
 
 
 class MainActivity : AppCompatActivity() {
 
-    private val TAG = "AndroidCameraApi"
-    private val ORIENTATIONS = SparseIntArray().apply {
-        append(Surface.ROTATION_0, 0)
-        append(Surface.ROTATION_90, 90)
-        append(Surface.ROTATION_180, 180)
-        append(Surface.ROTATION_270, 270)
-    }
+    private val TAG = "HandyCameraTag"
 
     private val cameraIndex = 0
     private var cameraId: String? = null
@@ -56,7 +53,7 @@ class MainActivity : AppCompatActivity() {
     private var param_focal_length = 0f
     private var param_focus_distance = 0f
     private var param_aperture = 0f
-    private var param_torch = false
+    private var param_flash = 0
 
     enum class ImageFormatEnum(val code: Int) {
         DNG(ImageFormat.RAW_SENSOR),
@@ -64,9 +61,16 @@ class MainActivity : AppCompatActivity() {
         RAW_PRIVATE(ImageFormat.RAW_PRIVATE),
         RAW12(ImageFormat.RAW12),
         RAW10(ImageFormat.RAW10),
+        JPEG(ImageFormat.JPEG),
+        HEIC(ImageFormat.HEIC),
         Depth16(ImageFormat.DEPTH16),
         DepthJPEG(ImageFormat.DEPTH_JPEG),
+    }
 
+    enum class FlashModeEnum(val code: Int) {
+        OFF(CameraMetadata.FLASH_MODE_OFF),
+        SINGLE(CameraMetadata.FLASH_MODE_SINGLE),
+        TORCH(CameraMetadata.FLASH_MODE_TORCH)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,15 +93,18 @@ class MainActivity : AppCompatActivity() {
         val characteristics = manager.getCameraCharacteristics(cameraId!!)
         cameraCharacteristics = characteristics
 
-        // flash
-        btn_torch.setOnClickListener {
-            param_torch = btn_torch.isChecked
-            updatePreview()
-        }
-
         // ImageFormat
         spinner_imageformat.adapter =
             ArrayAdapter<ImageFormatEnum>(this, R.layout.spinner_item, ImageFormatEnum.values())
+
+
+        // flash
+        spinner_flash.fromList(FlashModeEnum.values().toList()) { value ->
+            param_flash = value.code
+            updatePreview()
+        }
+//        spinner_imageformat.adapter =
+//            ArrayAdapter<FlashModeEnum>(this, R.layout.spinner_item, FlashModeEnum.values())
 
         // Aperture
         val apertures = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)!!
@@ -194,19 +201,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    val captureCallbackListener: CameraCaptureSession.CaptureCallback =
-        object : CameraCaptureSession.CaptureCallback() {
-            override fun onCaptureCompleted(
-                session: CameraCaptureSession,
-                request: CaptureRequest,
-                result: TotalCaptureResult
-            ) {
-                super.onCaptureCompleted(session, request, result)
-                Toast.makeText(this@MainActivity, "Saved:" + file!!, Toast.LENGTH_SHORT).show()
-                createCameraPreview()
-            }
-        }
-
     private fun startBackgroundThread() {
         mBackgroundThread = HandlerThread("Camera Background")
         mBackgroundThread!!.start()
@@ -243,26 +237,37 @@ class MainActivity : AppCompatActivity() {
             outputSurfaces.add(reader.surface)
             val captureBuilder =
                 cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-//            setupCaptureRequestParameters(captureBuilder!!)
+//            setupCaptureRequestParameters(captureBuilder)
             captureBuilder.addTarget(reader.surface)
-            captureBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+            val dateString = DateFormat.getDateTimeInstance().format(Date())
+            var name = if (asDng) {
+                "${dateString}.dng"
+            } else if (imageFormat == ImageFormat.JPEG) {
+                "${dateString}.jpg"
+            } else if (imageFormat == ImageFormat.HEIC) {
+                "${dateString}.heic"
+            } else {
+                "${dateString}.raw"
+            }
             val file = File(
                 Environment.getExternalStoragePublicDirectory(
                     Environment.DIRECTORY_DCIM
-                ), if (asDng) "test.dng" else "test.raw"
+                ), name
             )
             var captureResult: CaptureResult? = null
+
             Log.d(TAG, file.toString())
             val readerListener = object : OnImageAvailableListener {
                 override fun onImageAvailable(reader: ImageReader) {
-                    Log.d(TAG, "Readed")
+                    Log.d(TAG, "image available")
                     var image: Image? = null
                     try {
                         image = reader.acquireLatestImage()
+                        val size = Size(image.width, image.height)
+                        val buffer = image!!.planes[0].buffer
                         if (asDng) {
-                            saveDng(image)
+                            saveDng(buffer, size)
                         } else {
-                            val buffer = image!!.planes[0].buffer
                             val bytes = ByteArray(buffer.capacity())
                             buffer.get(bytes)
                             save(bytes)
@@ -287,16 +292,30 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                private fun saveDng(image: Image) {
-                    val dngCreator = DngCreator(characteristics, captureResult!!)
+                private fun saveDng(buffer: ByteBuffer, size: Size) {
+                    val cloneBuffer = ByteBuffer.allocate(buffer.capacity())
+                    buffer.rewind()
+                    cloneBuffer.put(buffer)
+                    buffer.rewind()
+                    cloneBuffer.flip()
 
-                    var output: OutputStream? = null
-                    try {
-                        output = FileOutputStream(file)
-                        dngCreator.writeImage(output!!, image)
-                    } finally {
-                        output?.close()
-                    }
+                    Thread {
+                        while (captureResult == null) {
+                            Thread.sleep(100)
+                        }
+
+                        val dngCreator = DngCreator(characteristics, captureResult!!)
+
+                        var dngStream: OutputStream? = null
+                        try {
+                            dngStream = FileOutputStream(file)
+                            dngCreator.writeByteBuffer(dngStream, size, cloneBuffer, 0)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        } finally {
+                            dngStream?.close()
+                        }
+                    }.start()
                 }
             }
             reader.setOnImageAvailableListener(readerListener, mBackgroundHandler)
@@ -384,32 +403,13 @@ class MainActivity : AppCompatActivity() {
     private fun setupCaptureRequestParameters(builder: CaptureRequest.Builder) {
         builder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
         builder.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
+        builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_OFF)
         builder.set(CaptureRequest.SENSOR_SENSITIVITY, param_sensitivity)
         builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, param_exposure_time)
         builder.set(CaptureRequest.LENS_FOCAL_LENGTH, param_focal_length)
         builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, param_focus_distance)
         builder.set(CaptureRequest.LENS_APERTURE, param_aperture)
-        builder.set(
-            CaptureRequest.FLASH_MODE,
-            if (param_torch) CameraMetadata.FLASH_MODE_TORCH else CameraMetadata.FLASH_MODE_OFF
-        )
-
-        // Orientation
-        val rotation = windowManager.defaultDisplay.rotation
-        builder.set(
-            CaptureRequest.JPEG_ORIENTATION,
-            sensorToDeviceRotation(cameraCharacteristics!!, rotation)
-        )
-    }
-
-    private fun sensorToDeviceRotation(
-        cameraCharacteristics: CameraCharacteristics,
-        deviceOrientation: Int
-    ): Int {
-        val sensorOrientation =
-            cameraCharacteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)!!
-        val deviceOrientation = ORIENTATIONS.get(deviceOrientation)
-        return (sensorOrientation + deviceOrientation + 360) % 360
+        builder.set(CaptureRequest.FLASH_MODE, param_flash)
     }
 
     private fun openCamera() {
@@ -503,7 +503,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         Log.e(TAG, "onPause")
-        //closeCamera();
+        closeCamera()
         stopBackgroundThread()
         super.onPause()
     }
